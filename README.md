@@ -1,145 +1,185 @@
 # CivicFlow
 
-CivicFlow is an AI paperwork copilot for older adults and caregivers.
+**AI Paperwork Copilot for Older Adults**
 
-It takes a mailed notice image from a laptop webcam, extracts the deadline + required steps, then guides a controlled benefits-style portal using screenshot-based UI navigation actions.
+CivicFlow helps older adults and caregivers complete high-stakes government forms by:
+1. **Scanning** mailed notices via webcam
+2. **Extracting** deadlines and requirements using Gemini 2.5 Flash AI
+3. **Navigating** government portals automatically through intelligent screenshot-based actions
+4. **Guiding** users step-by-step through complex paperwork workflows
 
-## Implemented MVP (local development phase)
+## How It Works
 
-- Webcam capture and image upload fallback in a React frontend.
-- `POST /intake/notice` in FastAPI for notice intake.
-- Notice extraction service with `mock` mode (default) and `vertex` integration points.
-- Session state persistence with checklist and action logs.
-- Controlled demo portal with full renewal flow:
-  - Start
-  - Identity verification
-  - Address confirmation
-  - Review
-  - Confirmation
-- Playwright browser worker with safe command schema:
-  - `start_session`
-  - `goto`
-  - `screenshot`
-  - `click_by_text`
-  - `type_into_label`
-  - `select_dropdown`
-  - `scroll_down`
-  - `wait`
-  - `close_session`
-- Screenshot -> planner -> action execution loop through:
-  - `POST /session/{id}/start`
-  - `POST /session/{id}/step`
-  - `GET /session/{id}/status`
+1. User holds a government notice (benefits renewal, housing recertification, etc.) in front of their laptop webcam
+2. Gemini AI analyzes the image and extracts: document type, deadline, reference numbers, and required information
+3. CivicFlow opens the relevant government portal and uses AI vision to navigate the forms
+4. The system fills out forms automatically, shows progress to the user, and completes the submission
 
-## Repo structure
+## Technical Architecture
 
-```text
-backend/         FastAPI orchestrator
-browser_worker/  FastAPI Playwright worker
-demo_portal/     Controlled benefits-style portal
-frontend/        React + Vite dashboard
-```
+### Components
+- **Frontend** (React + Vite) - Webcam capture, notice display, progress tracking
+- **Backend API** (FastAPI) - Orchestrates AI and browser automation
+- **Browser Worker** (Playwright) - Executes safe navigation actions
+- **Demo Portal** (FastAPI + Jinja2) - Simulated government benefits portal
 
-## Architecture diagram
+### AI Technology
+- **Gemini 2.5 Flash** (Google Vertex AI) for vision and planning
+- **Screenshot-based navigation** - AI sees the page and decides next action
+- **Safe action schema** - Only predefined actions allowed (click, type, scroll, wait)
+- **Robust error handling** - Intelligently waits when information is missing
 
-```mermaid
-flowchart LR
-    U[User on Laptop<br/>Web App + Webcam + Mic] --> FE[Frontend<br/>React + Vite]
+### Cloud Infrastructure
+- **Google Cloud Platform**
+- **Firestore** - Session storage
+- **Cloud Storage** - Notice images and screenshots
+- **Vertex AI** - Gemini API access
 
-    FE -->|Capture notice image| API[FastAPI Orchestrator]
-    FE -->|User intent / optional voice text| API
+## Setup & Run
 
-    API -->|Store notice/sessions (local MVP)| STORE[Local JSON Store]
-    API -->|Analyze notice image| GEM[Gemini Service Layer<br/>mock or Vertex]
-    GEM -->|Notice type, deadline, summary, required fields| API
+### Prerequisites
+- Python 3.13+
+- Node.js 18+
+- GCP account with Vertex AI enabled (for production mode)
 
-    API -->|Start browser session| BW[Browser Worker<br/>Playwright]
-    BW --> PORTAL[Controlled Demo Portal]
+### Quick Start
 
-    BW -->|Screenshot + state| API
-    API -->|UI reasoning request| GEM
-    GEM -->|Structured action JSON| API
-    API -->|Validated action| BW
-
-    API -->|Progress updates| FE
-```
-
-## Environment setup
-
-1. Create and activate a virtual environment (required for Python commands):
-
+1. **Install dependencies:**
 ```bash
+# Create virtual environment
 python3 -m venv .venv
 source .venv/bin/activate
-```
 
-2. Install Python dependencies:
-
-```bash
+# Install Python packages
 pip install -r backend/requirements.txt -r browser_worker/requirements.txt -r demo_portal/requirements.txt
-```
 
-3. Install Playwright Chromium:
-
-```bash
+# Install Playwright browser
 playwright install chromium
+
+# Install frontend dependencies
+cd frontend && npm install && cd ..
 ```
 
-4. Install frontend dependencies:
+2. **Configure GCP (for production mode):**
+```bash
+# Add your GCP credentials file to project root
+cp path/to/your/gcp-credentials.json ./gcp-credentials.json
 
+# Ensure Live API uses a Live-capable model + supported region
+# .env defaults:
+# CIVICFLOW_GEMINI_LIVE_MODEL=gemini-live-2.5-flash-native-audio
+# CIVICFLOW_GEMINI_LIVE_LOCATION=us-east4
+```
+
+3. **Run the application:**
+
+**Terminal 1 - Backend services:**
+```bash
+source .venv/bin/activate
+cd backend
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+**Terminal 2 - Browser worker:**
+```bash
+source .venv/bin/activate
+cd browser_worker
+# Optional for local manual takeover:
+# export CIVICFLOW_BROWSER_HEADLESS=false
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
+```
+
+**Terminal 3 - Demo portal:**
+```bash
+source .venv/bin/activate
+cd demo_portal
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8002
+```
+
+**Terminal 4 - Frontend:**
 ```bash
 cd frontend
-npm install
-cd ..
+npm run dev
 ```
 
-5. Configure env vars (optional now, required for Vertex mode later):
-
-```bash
-cp .env.example .env
+4. **Open the app:**
+```
+http://localhost:5173
 ```
 
-## Run locally
+### Testing the Flow
 
-Use two terminals (recommended).
+1. Upload any image with text (or use webcam to capture a notice)
+2. Click "Start Guided Help" to begin automated navigation
+3. If a sensitive field appears, the app pauses and asks for user input
+4. Use "Take Manual Control" when you want to fill parts yourself, then return to assistant mode
 
-Terminal 1: backend stack (demo portal + browser worker + API orchestrator)
+## Project Structure
 
-```bash
-./scripts/run-backend-dev.sh
+```
+civic_flow/
+├── backend/              # FastAPI orchestrator
+│   ├── app/
+│   │   ├── services/     # Gemini AI, Firestore, Storage
+│   │   ├── routers/      # API endpoints
+│   │   └── models/       # Pydantic schemas
+│   └── requirements.txt
+├── browser_worker/       # Playwright automation
+│   └── app/main.py       # Browser control logic
+├── demo_portal/          # Simulated government site
+│   └── app/
+│       ├── templates/    # HTML forms
+│       └── main.py
+├── frontend/             # React user interface
+│   └── src/
+│       ├── components/   # UI components
+│       └── lib/          # API client
+└── .env                  # Configuration
 ```
 
-Terminal 2: frontend
+## API Endpoints
 
-```bash
-cd frontend
-npm run dev -- --host 0.0.0.0 --port 5173
-```
+- `POST /intake/notice` - Upload and analyze notice image
+- `POST /session/{id}/start` - Begin automated navigation
+- `POST /session/{id}/step` - Execute next navigation step
+- `POST /session/{id}/provide-input` - Submit user-provided field value and resume
+- `POST /session/{id}/control-mode` - Switch between assistant and manual control
+- `GET /session/{id}/status` - Get current progress
+- `GET /health` - Health check
 
-Open `http://localhost:5173`.
+## Current Status
 
-Alternative manual mode (4 terminals) is still available if you want to run each backend service separately for debugging.
+✅ **Fully functional end-to-end demo**
+- Real Gemini 2.5 Flash AI integration (no mocks)
+- Webcam notice capture working
+- **Intelligent agent** - Adapts to any government website, not just demo portal
+- Automated portal navigation with context-aware decisions
+- **Real-time conversational voice AI** - Uses Gemini Live API with native audio
+  - Always-on microphone streaming (hands-free)
+  - AI listens and responds in natural conversation
+  - Proactively asks for missing information
+  - Guides users through each step with encouragement
+- **Anti-doom-scrolling logic** - Prevents getting stuck on information pages
+- Intelligent error handling (waits when info is missing)
+- Real website support - Extracts portal URLs from notices
+- Successfully completes government form workflows
 
-## API endpoints
+## Future Enhancements
 
-- `POST /intake/notice`
-- `GET /session/{id}`
-- `POST /session/{id}/start`
-- `POST /session/{id}/step`
-- `GET /session/{id}/status`
-- `GET /health`
+- Enhanced accessibility features (WCAG AAA compliance, adjustable font sizes)
+- Multi-language support (Spanish, Chinese, Vietnamese)
+- Mobile app version for on-the-go scanning
+- Cloud Run production deployment with auto-scaling
 
-## Gemini integration notes
+## Built With
 
-`CIVICFLOW_GEMINI_MODE=mock` is the default and was used for local validation.
+- **AI**: Google Gemini 2.5 Flash (Vertex AI)
+- **Backend**: FastAPI, Python 3.13
+- **Frontend**: React, TypeScript, Vite
+- **Automation**: Playwright
+- **Cloud**: Google Cloud Platform (Firestore, Cloud Storage, Vertex AI)
+- **Infrastructure**: Docker-ready for Cloud Run deployment
 
-`CIVICFLOW_GEMINI_MODE=vertex` path is scaffolded in `backend/app/services/gemini_service.py` and can be completed with your Cloud/Vertex setup.
+---
 
-## Validation run completed
-
-Completed local smoke test successfully:
-
-- Intake worked.
-- Session started.
-- Planner loop navigated the portal.
-- Submission reached confirmation in 8 steps.
+**Built for hackathon - March 2026**

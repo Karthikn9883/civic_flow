@@ -6,4 +6,8 @@ runtime_storage/
 .DS_Store
 .env
 frontend/dist/
-claude.md
+
+# GCP credentials - NEVER commit this!
+gcp-credentials.json
+gcp-credentials.json.json
+*.json.json
