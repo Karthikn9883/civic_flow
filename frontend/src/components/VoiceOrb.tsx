@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { appConfig } from "../config";
 
 export type OrbState = "idle" | "listening" | "processing" | "speaking";
 
@@ -125,7 +126,7 @@ export function VoiceOrb({ sessionId, onStateChange, onTranscript, onLog, onAgen
   // ── WebSocket ───────────────────────────────────────────────────────────────
   useEffect(() => {
     setWsStatus("connecting");
-    const ws = new WebSocket("ws://localhost:8000/voice/ws");
+    const ws = new WebSocket(appConfig.agentWebSocketUrl);
     wsRef.current = ws;
 
     ws.onopen = () => {

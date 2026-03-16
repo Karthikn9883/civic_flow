@@ -23,7 +23,7 @@ const __dirname = path.dirname(__filename);
 const rootDir = path.join(__dirname, '..', '..');
 dotenv.config({ path: path.join(rootDir, '.env') });
 
-const PORT               = Number(process.env.AGENT_PORT || 8000);
+const PORT               = Number(process.env.PORT || process.env.AGENT_PORT || 8000);
 const GOOGLE_API_KEY     = process.env.GOOGLE_API_KEY;
 const GCP_PROJECT        = process.env.GCP_PROJECT;
 const GCP_LOCATION       = process.env.GCP_LOCATION || 'us-central1';

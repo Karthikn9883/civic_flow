@@ -55,6 +55,7 @@ app.add_middleware(
 _playwright: Playwright | None = None
 _browser: Browser | None = None
 _sessions: dict[str, BrowserSession] = {}
+DEFAULT_START_URL = os.getenv("CIVICFLOW_DEMO_PORTAL_URL", "http://localhost:8002")
 
 
 @app.on_event("startup")
@@ -314,7 +315,7 @@ async def session_command(request: WorkerCommandRequest) -> WorkerCommandRespons
     payload = request.payload
 
     if command_name == "start_session":
-        start_url = str(payload.get("start_url", "http://localhost:8002"))
+        start_url = str(payload.get("start_url", DEFAULT_START_URL))
         snapshot = await _start_session(request.session_id, start_url=start_url)
         return WorkerCommandResponse(success=True, message="Session started", snapshot=snapshot)
 

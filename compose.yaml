@@ -1,0 +1,62 @@
+services:
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_AGENT_BASE_URL: ${VITE_AGENT_BASE_URL:-http://localhost:8000}
+        VITE_AGENT_WS_URL: ${VITE_AGENT_WS_URL:-ws://localhost:8000/voice/ws}
+        VITE_BROWSER_WORKER_BASE_URL: ${VITE_BROWSER_WORKER_BASE_URL:-http://localhost:8001}
+    ports:
+      - "5173:8080"
+    depends_on:
+      - agent
+      - browser-worker
+
+  agent:
+    build:
+      context: ./agent
+    environment:
+      PORT: "8080"
+      AGENT_PORT: "8080"
+      USE_VERTEX: "false"
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      GCP_PROJECT: ${GCP_PROJECT}
+      GCP_LOCATION: ${GCP_LOCATION}
+      BROWSER_WORKER_URL: http://browser-worker:8080
+      GEMINI_LIVE_MODEL: ${GEMINI_LIVE_MODEL}
+      GEMINI_VISION_MODEL: ${GEMINI_VISION_MODEL}
+      VOICE_NAME: ${VOICE_NAME}
+      ENABLE_GOOGLE_SEARCH: ${ENABLE_GOOGLE_SEARCH}
+    ports:
+      - "8000:8080"
+    depends_on:
+      - browser-worker
+
+  browser-worker:
+    build:
+      context: ./browser_worker
+    environment:
+      PORT: "8080"
+      CIVICFLOW_BROWSER_HEADLESS: "true"
+      CIVICFLOW_DEMO_PORTAL_URL: ${CIVICFLOW_DEMO_PORTAL_URL:-http://localhost:8002}
+    ports:
+      - "8001:8080"
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      PORT: "8080"
+      CIVICFLOW_BROWSER_WORKER_URL: http://browser-worker:8080
+      CIVICFLOW_DEMO_PORTAL_URL: ${CIVICFLOW_DEMO_PORTAL_URL:-http://localhost:8002}
+      CIVICFLOW_ALLOWED_ORIGINS_RAW: ${CIVICFLOW_ALLOWED_ORIGINS_RAW:-http://localhost:5173,http://127.0.0.1:5173}
+      CIVICFLOW_GCP_PROJECT: ${CIVICFLOW_GCP_PROJECT}
+      CIVICFLOW_GCP_LOCATION: ${CIVICFLOW_GCP_LOCATION}
+      CIVICFLOW_GEMINI_MODE: ${CIVICFLOW_GEMINI_MODE}
+      CIVICFLOW_GEMINI_NOTICE_MODEL: ${CIVICFLOW_GEMINI_NOTICE_MODEL}
+      CIVICFLOW_GEMINI_PLANNER_MODEL: ${CIVICFLOW_GEMINI_PLANNER_MODEL}
+      CIVICFLOW_DEFAULT_USER_PROFILE_RAW: ${CIVICFLOW_DEFAULT_USER_PROFILE_RAW}
+    ports:
+      - "8002:8080"
+    depends_on:
+      - browser-worker

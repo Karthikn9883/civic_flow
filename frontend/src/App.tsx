@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { VoiceOrb, type OrbState } from "./components/VoiceOrb";
+import { appConfig } from "./config";
 
 type TabId = "browser" | "status";
 type ControlMode = "agent" | "manual";
@@ -64,7 +65,7 @@ export default function App() {
     // Fetch a screenshot after navigation settles
     setTimeout(async () => {
       try {
-        const r = await fetch(`${BROWSER_WORKER_URL}/command`, {
+        const r = await fetch("http://localhost:8001/command", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ command: "screenshot" }),
@@ -88,7 +89,7 @@ export default function App() {
     setIsNavigating(true);
     addLog("Executing navigation step…", "vision");
     try {
-      const r = await fetch(`${AGENT_URL}/session/${SESSION_ID}/step`, { method: "POST" });
+      const r = await fetch(`http://localhost:8000/session/${SESSION_ID}/step`, { method: "POST" });
       const d = await r.json();
       if (d.screenshot) setScreenshot(d.screenshot);
       if (d.url) setCurrentUrl(d.url);
@@ -156,7 +157,7 @@ export default function App() {
     setCurrentUrl(url);
     setActiveTab("browser");
     try {
-      const r = await fetch(`${BROWSER_WORKER_URL}/command`, {
+      const r = await fetch("http://localhost:8001/command", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ command: "navigate", params: { url } }),

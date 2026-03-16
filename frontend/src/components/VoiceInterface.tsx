@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { appConfig } from "../config";
 
 interface VoiceInterfaceProps {
   sessionId: string | null;
@@ -24,7 +25,7 @@ export function VoiceInterface({ sessionId, onCommandReceived }: VoiceInterfaceP
     if (!sessionId) return;
 
     const connectWebSocket = () => {
-      const ws = new WebSocket(`ws://localhost:8000/voice/ws`);
+      const ws = new WebSocket(appConfig.agentWebSocketUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {

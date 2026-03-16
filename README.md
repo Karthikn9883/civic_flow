@@ -1,185 +1,278 @@
 # CivicFlow
 
-**AI Paperwork Copilot for Older Adults**
+**AI-powered voice and vision agent for navigating websites through natural conversation.**
 
-CivicFlow helps older adults and caregivers complete high-stakes government forms by:
-1. **Scanning** mailed notices via webcam
-2. **Extracting** deadlines and requirements using Gemini 2.5 Flash AI
-3. **Navigating** government portals automatically through intelligent screenshot-based actions
-4. **Guiding** users step-by-step through complex paperwork workflows
+Built for the Google AI Hackathon using Gemini Live for voice and Gemini 2.5 Flash for screenshot-based action planning.
 
-## How It Works
+## What It Does
 
-1. User holds a government notice (benefits renewal, housing recertification, etc.) in front of their laptop webcam
-2. Gemini AI analyzes the image and extracts: document type, deadline, reference numbers, and required information
-3. CivicFlow opens the relevant government portal and uses AI vision to navigate the forms
-4. The system fills out forms automatically, shows progress to the user, and completes the submission
+CivicFlow lets a user speak naturally while an agent:
 
-## Technical Architecture
+1. Listens to the request through Gemini Live
+2. Opens a website in a remote Playwright browser
+3. Looks at screenshots of that browser
+4. Decides the next UI action without using site APIs or DOM automation logic
+5. Reports progress back through voice plus a visible browser panel in the UI
 
-### Components
-- **Frontend** (React + Vite) - Webcam capture, notice display, progress tracking
-- **Backend API** (FastAPI) - Orchestrates AI and browser automation
-- **Browser Worker** (Playwright) - Executes safe navigation actions
-- **Demo Portal** (FastAPI + Jinja2) - Simulated government benefits portal
+The current frontend shows the remote browser **visually through streamed screenshots**, not through a native desktop browser window. That is the current deployment model and the one prepared for Cloud Run.
 
-### AI Technology
-- **Gemini 2.5 Flash** (Google Vertex AI) for vision and planning
-- **Screenshot-based navigation** - AI sees the page and decides next action
-- **Safe action schema** - Only predefined actions allowed (click, type, scroll, wait)
-- **Robust error handling** - Intelligently waits when information is missing
+## Current Architecture
 
-### Cloud Infrastructure
-- **Google Cloud Platform**
-- **Firestore** - Session storage
-- **Cloud Storage** - Notice images and screenshots
-- **Vertex AI** - Gemini API access
+The repo currently contains **four services**:
 
-## Setup & Run
+- `frontend` - React + Vite UI with voice orb, browser screenshot panel, and activity log
+- `agent` - Node.js / TypeScript service for Gemini Live voice, vision loop orchestration, HTTP APIs, and `/voice/ws`
+- `browser_worker` - FastAPI + Playwright service that executes browser actions and returns screenshots
+- `backend` - FastAPI orchestration API for notice intake and guided form sessions
+
+### Runtime Shape
+
+```text
+Frontend (React)
+  -> WebSocket -> Agent (/voice/ws)
+  -> HTTP      -> Agent (/session/:id/step)
+  -> HTTP      -> Browser Worker (/command)
+
+Agent (Node.js)
+  -> Gemini Live API
+  -> Gemini 2.5 Flash
+  -> Browser Worker (/command)
+
+Backend (FastAPI)
+  -> Browser Worker (/session/command)
+  -> Gemini service for notice parsing and planning
+```
+
+### Important Note
+
+For the current voice demo path, the frontend is primarily wired to the `agent` and `browser_worker` services. The `backend` service is still part of the repo and deployable, but it is not the primary path used by the current voice-first UI.
+
+## How The Agent Works
+
+### Voice Loop
+
+- Browser microphone audio is streamed to Gemini Live over WebSocket
+- Gemini Live produces streaming audio + transcription back to the frontend
+- Gemini Live can call the `navigate_to_website` tool
+- The agent then starts the screenshot-based navigation loop
+
+### Vision Loop
+
+For each step, the agent:
+
+1. Requests a screenshot from `browser_worker`
+2. Sends the screenshot and task context to Gemini 2.5 Flash
+3. Receives a structured action such as:
+   - `click_by_text`
+   - `type_into_label`
+   - `scroll_down`
+   - `wait`
+   - `request_user_input`
+   - `finish`
+4. Executes the action through Playwright
+5. Broadcasts the updated screenshot and status back to the frontend
+
+The current browser worker does **not** implement `press_enter` or `press_escape`. The current action schema is the one defined in:
+
+- [agent/src/types.ts](/c:/Users/pavan/civic_flow/agent/src/types.ts)
+- [browser_worker/app/main.py](/c:/Users/pavan/civic_flow/browser_worker/app/main.py)
+
+## Cloud Run Deployment Model
+
+The current codebase is prepared to deploy as **four separate Cloud Run services**:
+
+1. `civicflow-frontend`
+2. `civicflow-agent`
+3. `civicflow-browser-worker`
+4. `civicflow-backend`
+
+### Visibility Model
+
+On Cloud Run, users do **not** see a native Chrome window from the server. Instead:
+
+- Playwright runs headless inside `browser_worker`
+- Screenshots are returned after actions
+- The frontend displays those screenshots as the visible browser panel
+
+This matches the current Docker and Cloud Run direction.
+
+### Current Scaling Constraint
+
+The repo still uses in-memory state in important places:
+
+- `agent` keeps active loop/session state in memory
+- `browser_worker` keeps browser sessions/global page state in memory
+- `backend` uses in-memory session storage
+
+Because of that, initial Cloud Run deployment should be conservative:
+
+- keep `browser_worker` at `maxScale=1`
+- keep `backend` at `maxScale=1`
+- keep `agent` sticky and conservative as well
+
+## Local Development
 
 ### Prerequisites
-- Python 3.13+
-- Node.js 18+
-- GCP account with Vertex AI enabled (for production mode)
 
-### Quick Start
+- Node.js 20+
+- Python 3.13+ recommended for the Python services
+- Docker Desktop for the containerized flow
 
-1. **Install dependencies:**
+## Local Run With Docker
+
+This is the easiest way to run the current stack.
+
+From the repo root:
+
 ```bash
-# Create virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
-
-# Install Python packages
-pip install -r backend/requirements.txt -r browser_worker/requirements.txt -r demo_portal/requirements.txt
-
-# Install Playwright browser
-playwright install chromium
-
-# Install frontend dependencies
-cd frontend && npm install && cd ..
+docker compose up --build
 ```
 
-2. **Configure GCP (for production mode):**
-```bash
-# Add your GCP credentials file to project root
-cp path/to/your/gcp-credentials.json ./gcp-credentials.json
+Then open:
 
-# Ensure Live API uses a Live-capable model + supported region
-# .env defaults:
-# CIVICFLOW_GEMINI_LIVE_MODEL=gemini-live-2.5-flash-native-audio
-# CIVICFLOW_GEMINI_LIVE_LOCATION=us-east4
+- Frontend: `http://localhost:5173`
+- Agent health: `http://localhost:8000/health`
+- Browser worker health: `http://localhost:8001/health`
+- Backend health: `http://localhost:8002/health`
+
+### Docker Mode Notes
+
+- The Docker setup currently forces the `agent` into **API key mode** for easier local execution
+- The browser worker runs with `CIVICFLOW_BROWSER_HEADLESS=true`
+- The visible browser experience comes from screenshots rendered in the frontend
+
+## Local Run Without Docker
+
+### 1. Install dependencies
+
+```bash
+# Python deps
+pip install -r backend/requirements.txt
+pip install -r browser_worker/requirements.txt
+
+# Node deps
+cd agent && npm install
+cd ../frontend && npm install
+cd ..
 ```
 
-3. **Run the application:**
+### 2. Start services
 
-**Terminal 1 - Backend services:**
-```bash
-source .venv/bin/activate
-cd backend
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
+Terminal 1:
 
-**Terminal 2 - Browser worker:**
 ```bash
-source .venv/bin/activate
 cd browser_worker
-# Optional for local manual takeover:
-# export CIVICFLOW_BROWSER_HEADLESS=false
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8001
 ```
 
-**Terminal 3 - Demo portal:**
+Terminal 2:
+
 ```bash
-source .venv/bin/activate
-cd demo_portal
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8002
+cd agent
+npm run dev
 ```
 
-**Terminal 4 - Frontend:**
+Terminal 3:
+
 ```bash
 cd frontend
 npm run dev
 ```
 
-4. **Open the app:**
-```
-http://localhost:5173
+Optional Terminal 4:
+
+```bash
+cd backend
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8002
 ```
 
-### Testing the Flow
+## Environment Variables
 
-1. Upload any image with text (or use webcam to capture a notice)
-2. Click "Start Guided Help" to begin automated navigation
-3. If a sensitive field appears, the app pauses and asks for user input
-4. Use "Take Manual Control" when you want to fill parts yourself, then return to assistant mode
+### Local Docker / API key mode
+
+```bash
+USE_VERTEX=false
+GOOGLE_API_KEY=your-key
+GEMINI_LIVE_MODEL=gemini-2.5-flash-native-audio-preview-09-2025
+GEMINI_VISION_MODEL=gemini-2.5-flash
+VOICE_NAME=Puck
+```
+
+### Cloud Run / Vertex mode
+
+```bash
+USE_VERTEX=true
+GCP_PROJECT=your-project-id
+GCP_LOCATION=us-central1
+GEMINI_LIVE_MODEL=gemini-live-2.5-flash-native-audio
+GEMINI_VISION_MODEL=gemini-2.5-flash
+VOICE_NAME=Puck
+```
+
+### Frontend service URLs
+
+The frontend now uses environment-driven endpoints rather than hardcoded localhost URLs:
+
+```bash
+VITE_AGENT_BASE_URL=http://localhost:8000
+VITE_AGENT_WS_URL=ws://localhost:8000/voice/ws
+VITE_BROWSER_WORKER_BASE_URL=http://localhost:8001
+```
+
+## Main Endpoints
+
+### Agent
+
+- `GET /health`
+- `POST /session/:sessionId/step`
+- `WS /voice/ws`
+
+### Browser Worker
+
+- `GET /health`
+- `POST /command`
+- `POST /session/command`
+
+### Backend
+
+- `GET /health`
+- `POST /intake/notice`
+- `GET /session/{session_id}`
+- `POST /session/{session_id}/start`
+- `POST /session/{session_id}/step`
+- `POST /session/{session_id}/provide-input`
+- `POST /session/{session_id}/control-mode`
+- `GET /session/{session_id}/status`
 
 ## Project Structure
 
-```
+```text
 civic_flow/
-├── backend/              # FastAPI orchestrator
-│   ├── app/
-│   │   ├── services/     # Gemini AI, Firestore, Storage
-│   │   ├── routers/      # API endpoints
-│   │   └── models/       # Pydantic schemas
-│   └── requirements.txt
-├── browser_worker/       # Playwright automation
-│   └── app/main.py       # Browser control logic
-├── demo_portal/          # Simulated government site
-│   └── app/
-│       ├── templates/    # HTML forms
-│       └── main.py
-├── frontend/             # React user interface
-│   └── src/
-│       ├── components/   # UI components
-│       └── lib/          # API client
-└── .env                  # Configuration
+  frontend/         React UI
+  agent/            Node.js agent orchestrator
+  browser_worker/   FastAPI + Playwright browser executor
+  backend/          FastAPI intake/navigation API
+  compose.yaml      Local multi-service Docker setup
+  .env              Local configuration
 ```
 
-## API Endpoints
+## Current Limitations
 
-- `POST /intake/notice` - Upload and analyze notice image
-- `POST /session/{id}/start` - Begin automated navigation
-- `POST /session/{id}/step` - Execute next navigation step
-- `POST /session/{id}/provide-input` - Submit user-provided field value and resume
-- `POST /session/{id}/control-mode` - Switch between assistant and manual control
-- `GET /session/{id}/status` - Get current progress
-- `GET /health` - Health check
+- Browser visibility is screenshot-based, not live desktop streaming
+- The backend and browser worker still rely on in-memory state
+- The current frontend mostly exercises the `agent` + `browser_worker` path
+- Cloud Run deployment should start with conservative scaling before shared state is externalized
 
-## Current Status
+## Status
 
-✅ **Fully functional end-to-end demo**
-- Real Gemini 2.5 Flash AI integration (no mocks)
-- Webcam notice capture working
-- **Intelligent agent** - Adapts to any government website, not just demo portal
-- Automated portal navigation with context-aware decisions
-- **Real-time conversational voice AI** - Uses Gemini Live API with native audio
-  - Always-on microphone streaming (hands-free)
-  - AI listens and responds in natural conversation
-  - Proactively asks for missing information
-  - Guides users through each step with encouragement
-- **Anti-doom-scrolling logic** - Prevents getting stuck on information pages
-- Intelligent error handling (waits when info is missing)
-- Real website support - Extracts portal URLs from notices
-- Successfully completes government form workflows
+Current repo state:
 
-## Future Enhancements
-
-- Enhanced accessibility features (WCAG AAA compliance, adjustable font sizes)
-- Multi-language support (Spanish, Chinese, Vietnamese)
-- Mobile app version for on-the-go scanning
-- Cloud Run production deployment with auto-scaling
-
-## Built With
-
-- **AI**: Google Gemini 2.5 Flash (Vertex AI)
-- **Backend**: FastAPI, Python 3.13
-- **Frontend**: React, TypeScript, Vite
-- **Automation**: Playwright
-- **Cloud**: Google Cloud Platform (Firestore, Cloud Storage, Vertex AI)
-- **Infrastructure**: Docker-ready for Cloud Run deployment
+- Local Docker build path is in place
+- Frontend URLs are environment-driven
+- Browser worker runs cleanly in headless container mode
+- Agent voice session works in API key mode locally
+- The repo is ready for Cloud Run service YAML generation next
 
 ---
 
-**Built for hackathon - March 2026**
+Built for hackathon work in March 2026.

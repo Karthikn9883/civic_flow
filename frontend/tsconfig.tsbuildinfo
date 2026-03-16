@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/main.tsx","./src/components/checklistpanel.tsx","./src/components/guidednavigationpanel.tsx","./src/components/noticesummarycard.tsx","./src/components/voiceagent.tsx","./src/components/voiceguidance.tsx","./src/components/webcamcapture.tsx","./src/lib/api.ts","./src/lib/types.ts"],"version":"5.9.3"}
+{"root":["./src/app.tsx","./src/config.ts","./src/main.tsx","./src/components/agentstatus.tsx","./src/components/browsercontrol.tsx","./src/components/voiceinterface.tsx","./src/components/voiceorb.tsx"],"version":"5.9.3"}

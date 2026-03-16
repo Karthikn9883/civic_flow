@@ -21,9 +21,11 @@ class Settings(BaseSettings):
     app_name: str = "CivicFlow API Orchestrator"
     app_env: str = "dev"
     host: str = "0.0.0.0"
-    port: int = 8000
+    port: int = Field(default_factory=lambda: int(os.getenv("PORT", "8000")))
 
     browser_worker_url: str = "http://localhost:8001"
+    demo_portal_url: str = "http://localhost:8002"
+    allowed_origins_raw: str = "http://localhost:5173,http://127.0.0.1:5173"
 
     worker_timeout_seconds: int = 60
     max_navigation_steps: int = 25
@@ -70,6 +72,21 @@ class Settings(BaseSettings):
             "street_address": "123 Maple Ave",
             "zip_code": "94107",
         }
+
+    @property
+    def allowed_origins(self) -> list[str]:
+        raw = self.allowed_origins_raw.strip()
+        if not raw:
+            return []
+
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+        except json.JSONDecodeError:
+            pass
+
+        return [item.strip() for item in raw.split(",") if item.strip()]
 
 
 @lru_cache(maxsize=1)
