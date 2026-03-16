@@ -197,7 +197,10 @@ export class VoiceAgent extends EventEmitter {
         }
         const liveSession = session.liveSession;
         try {
-            await liveSession.sendClientContent({ turns: message, turnComplete: true });
+            await liveSession.sendClientContent({
+                turns: [{ role: 'user', parts: [{ text: message }] }],
+                turnComplete: true,
+            });
             console.log(`[VoiceAgent] Announced to ${sessionId}: ${message}`);
         }
         catch (error) {

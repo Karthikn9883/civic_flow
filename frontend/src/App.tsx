@@ -11,6 +11,9 @@ interface LogEntry {
   time: string;
 }
 
+const AGENT_URL        = (import.meta.env.VITE_AGENT_URL        as string | undefined) ?? 'http://localhost:8000';
+const BROWSER_WORKER_URL = (import.meta.env.VITE_BROWSER_WORKER_URL as string | undefined) ?? 'http://localhost:8001';
+
 const SESSION_ID = Math.random().toString(36).slice(2, 14);
 
 let logCounter = 0;
@@ -61,7 +64,7 @@ export default function App() {
     // Fetch a screenshot after navigation settles
     setTimeout(async () => {
       try {
-        const r = await fetch("http://localhost:8001/command", {
+        const r = await fetch(`${BROWSER_WORKER_URL}/command`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ command: "screenshot" }),
@@ -85,7 +88,7 @@ export default function App() {
     setIsNavigating(true);
     addLog("Executing navigation step…", "vision");
     try {
-      const r = await fetch(`http://localhost:8000/session/${SESSION_ID}/step`, { method: "POST" });
+      const r = await fetch(`${AGENT_URL}/session/${SESSION_ID}/step`, { method: "POST" });
       const d = await r.json();
       if (d.screenshot) setScreenshot(d.screenshot);
       if (d.url) setCurrentUrl(d.url);
@@ -153,7 +156,7 @@ export default function App() {
     setCurrentUrl(url);
     setActiveTab("browser");
     try {
-      const r = await fetch("http://localhost:8001/command", {
+      const r = await fetch(`${BROWSER_WORKER_URL}/command`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ command: "navigate", params: { url } }),

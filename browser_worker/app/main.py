@@ -143,64 +143,70 @@ async def simple_command(request: CommandRequest) -> CommandResponse:
                 url=page.url
             )
 
-        if command == "click_by_text":
+        if command == "type_into_label":
             target_text = params.get("text", "")
-            if not target_text:
-                return CommandResponse(success=False, error="Missing text parameter")
-
-            # Try different locator strategies
-            locator = page.get_by_role("button", name=target_text)
-            if await locator.count() > 0:
-                await locator.first.click(timeout=5000)
-            else:
-                locator = page.get_by_role("link", name=target_text)
-                if await locator.count() > 0:
-                    await locator.first.click(timeout=5000)
-                else:
-                    locator = page.get_by_text(target_text, exact=False)
-                    if await locator.count() > 0:
-                        await locator.first.click(timeout=5000)
-                    else:
-                        return CommandResponse(
-                            success=False,
-                            error=f"Could not find element with text '{target_text}'"
-                        )
-
-            await page.wait_for_load_state("domcontentloaded", timeout=3000)
+            value = params.get("value", "")
+            # Try strategies in priority order until one lands
+            filled = False
+            # 1. Explicit label match
+            loc = page.get_by_label(target_text, exact=False)
+            if await loc.count() > 0:
+                await loc.first.fill(value)
+                filled = True
+            # 2. Placeholder partial match
+            if not filled:
+                loc = page.locator(
+                    f"input[placeholder*='{target_text}' i], textarea[placeholder*='{target_text}' i]"
+                )
+                if await loc.count() > 0:
+                    await loc.first.fill(value)
+                    filled = True
+            # 3. ARIA searchbox role (Instacart and similar SPAs)
+            if not filled:
+                loc = page.get_by_role("searchbox")
+                if await loc.count() > 0:
+                    await loc.first.click()
+                    await loc.first.fill(value)
+                    filled = True
+            # 4. input[type=search]
+            if not filled:
+                loc = page.locator("input[type='search']")
+                if await loc.count() > 0:
+                    await loc.first.click()
+                    await loc.first.fill(value)
+                    filled = True
+            # 5. Any visible text/email input as last resort
+            if not filled:
+                loc = page.locator("input[type='text']:visible, input:not([type]):visible").first
+                if await loc.count() > 0:
+                    await loc.first.fill(value)
+                    filled = True
+            if not filled:
+                return CommandResponse(
+                    success=False,
+                    error=f"Could not find input for '{target_text}'"
+                )
             screenshot_bytes = await page.screenshot(type="png")
             screenshot_base64 = base64.b64encode(screenshot_bytes).decode("utf-8")
             return CommandResponse(
                 success=True,
-                message=f"Clicked '{target_text}'",
+                message=f"Filled '{target_text}' with '{value}'",
                 screenshot=screenshot_base64,
                 url=page.url
             )
 
-        if command == "type_into_label":
-            target_text = params.get("text", "")
-            value = params.get("value", "")
-            if not target_text:
-                return CommandResponse(success=False, error="Missing text parameter")
-
-            locator = page.get_by_label(target_text, exact=False)
-            if await locator.count() > 0:
-                await locator.first.fill(value)
-            else:
-                # Try placeholder fallback
-                fallback = page.locator(f"input[placeholder*='{target_text}' i]")
-                if await fallback.count() > 0:
-                    await fallback.first.fill(value)
-                else:
-                    return CommandResponse(
-                        success=False,
-                        error=f"Could not find input for label '{target_text}'"
-                    )
-
+        if command == "press_enter":
+            await page.keyboard.press("Enter")
+            await page.wait_for_timeout(1200)
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=3000)
+            except Exception:
+                pass
             screenshot_bytes = await page.screenshot(type="png")
             screenshot_base64 = base64.b64encode(screenshot_bytes).decode("utf-8")
             return CommandResponse(
                 success=True,
-                message=f"Filled '{target_text}'",
+                message="Pressed Enter",
                 screenshot=screenshot_base64,
                 url=page.url
             )
@@ -213,6 +219,79 @@ async def simple_command(request: CommandRequest) -> CommandResponse:
             return CommandResponse(
                 success=True,
                 message="Scrolled down",
+                screenshot=screenshot_base64,
+                url=page.url
+            )
+
+        if command == "scroll_up":
+            await page.mouse.wheel(0, -900)
+            await page.wait_for_timeout(500)
+            screenshot_bytes = await page.screenshot(type="png")
+            screenshot_base64 = base64.b64encode(screenshot_bytes).decode("utf-8")
+            return CommandResponse(
+                success=True,
+                message="Scrolled up",
+                screenshot=screenshot_base64,
+                url=page.url
+            )
+
+        if command == "wait":
+            seconds = float(params.get("seconds", 1.5))
+            seconds = max(0.5, min(seconds, 8.0))
+            await asyncio.sleep(seconds)
+            screenshot_bytes = await page.screenshot(type="png")
+            screenshot_base64 = base64.b64encode(screenshot_bytes).decode("utf-8")
+            return CommandResponse(
+                success=True,
+                message=f"Waited {seconds}s",
+                screenshot=screenshot_base64,
+                url=page.url
+            )
+
+        if command == "press_escape":
+            await page.keyboard.press("Escape")
+            await page.wait_for_timeout(800)
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=2000)
+            except Exception:
+                pass
+            screenshot_bytes = await page.screenshot(type="png")
+            screenshot_base64 = base64.b64encode(screenshot_bytes).decode("utf-8")
+            return CommandResponse(
+                success=True,
+                message="Pressed Escape",
+                screenshot=screenshot_base64,
+                url=page.url
+            )
+
+        if command == "click_by_text":
+            # Extended click: tries button, link, text, then any element with matching aria-label
+            target_text = params.get("text", "")
+            if not target_text:
+                return CommandResponse(success=False, error="Missing text parameter")
+            clicked = False
+            for locator in [
+                page.get_by_role("button", name=target_text),
+                page.get_by_role("link", name=target_text),
+                page.get_by_text(target_text, exact=False),
+                page.locator(f"[aria-label*='{target_text}' i]"),
+                page.locator(f"[title*='{target_text}' i]"),
+            ]:
+                if await locator.count() > 0:
+                    await locator.first.click(timeout=5000)
+                    clicked = True
+                    break
+            if not clicked:
+                return CommandResponse(success=False, error=f"Could not find '{target_text}'")
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=3000)
+            except Exception:
+                await page.wait_for_timeout(400)
+            screenshot_bytes = await page.screenshot(type="png")
+            screenshot_base64 = base64.b64encode(screenshot_bytes).decode("utf-8")
+            return CommandResponse(
+                success=True,
+                message=f"Clicked '{target_text}'",
                 screenshot=screenshot_base64,
                 url=page.url
             )

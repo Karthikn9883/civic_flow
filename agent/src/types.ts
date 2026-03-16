@@ -52,10 +52,11 @@ export interface VoiceCommand {
 }
 
 export interface NavigationAction {
-  action: 'click_by_text' | 'type_into_label' | 'scroll_down' | 'wait' | 'finish' | 'request_user_input';
+  action: 'click_by_text' | 'type_into_label' | 'press_enter' | 'press_escape' | 'scroll_down' | 'scroll_up' | 'wait' | 'finish' | 'request_user_input';
   targetText?: string;
   inputValue?: string;
   reason: string;
+  observation?: string; // what the model saw on screen before deciding
 }
 
 export interface AgentStatus {

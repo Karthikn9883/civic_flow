@@ -23,14 +23,13 @@ const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
 const GCP_PROJECT = process.env.GCP_PROJECT;
 const GCP_LOCATION = process.env.GCP_LOCATION || 'us-central1';
 const BROWSER_WORKER_URL = process.env.BROWSER_WORKER_URL || 'http://localhost:8001';
-const GEMINI_MODE = (process.env.CIVICFLOW_GEMINI_MODE || '').toLowerCase();
-const USE_VERTEX = GEMINI_MODE === 'vertex' || process.env.GOOGLE_GENAI_USE_VERTEXAI === 'true';
+const USE_VERTEX = process.env.USE_VERTEX === 'true';
 if (USE_VERTEX && !GCP_PROJECT) {
-    console.error('ERROR: GCP_PROJECT is required in .env when CIVICFLOW_GEMINI_MODE=vertex');
+    console.error('ERROR: GCP_PROJECT is required in .env when USE_VERTEX=true');
     process.exit(1);
 }
 if (!USE_VERTEX && !GOOGLE_API_KEY) {
-    console.error('ERROR: GOOGLE_API_KEY is required in .env when using API key mode');
+    console.error('ERROR: GOOGLE_API_KEY is required in .env when USE_VERTEX=false');
     process.exit(1);
 }
 // ── Gemini client ──────────────────────────────────────────────────────────────
@@ -44,7 +43,7 @@ const liveAi = USE_VERTEX
         vertexai: false,
         apiKey: GOOGLE_API_KEY,
     });
-const LIVE_MODEL = process.env.GEMINI_LIVE_MODEL || (USE_VERTEX ? 'gemini-live-2.5-flash' : 'gemini-2.5-flash-native-audio-preview-09-2025');
+const LIVE_MODEL = process.env.GEMINI_LIVE_MODEL || 'gemini-live-2.5-flash-native-audio';
 const VISION_MODEL = process.env.GEMINI_VISION_MODEL || 'gemini-2.5-flash';
 const VOICE_NAME = process.env.VOICE_NAME || 'Puck';
 // ── Live session config (matches official Google notebook) ───────────────────
@@ -62,10 +61,18 @@ const liveConfig = {
             functionDeclarations: [
                 {
                     name: 'navigate_to_website',
-                    description: 'Open one or more websites in the browser and complete tasks for the user. Supports multi-step plans across multiple sites.',
+                    description: 'Open websites and complete tasks. Accepts either {url, task} or {steps:[{url, task}, ...]}.',
                     parameters: {
                         type: Type.OBJECT,
                         properties: {
+                            url: {
+                                type: Type.STRING,
+                                description: 'Single-step URL, e.g. https://www.instacart.com',
+                            },
+                            task: {
+                                type: Type.STRING,
+                                description: 'Single-step task for the URL',
+                            },
                             steps: {
                                 type: Type.ARRAY,
                                 description: 'Ordered list of navigation steps. Each step is one website + task.',
@@ -79,26 +86,74 @@ const liveConfig = {
                                 },
                             },
                         },
-                        required: ['steps'],
+                        required: [],
                     },
                 },
             ],
         },
     ],
-    systemInstruction: `You are CivicFlow, a powerful AI agent that navigates ANY website and completes real tasks for the user.
+    systemInstruction: `You are CivicFlow, a conversational web navigation assistant. You complete real tasks on live websites using the browser tool, and you maintain awareness of the user’s overall goal throughout the conversation.
 
-CRITICAL: You MUST call navigate_to_website for ANY web request. You take real action — never say you can only guide.
+OPERATING RULES
 
-The steps array lets you plan multi-site workflows in one call:
-- "order tomatoes from Costco on Instacart" → steps: [{url: "https://www.instacart.com", task: "find Costco store and add tomatoes to cart"}]
-- "file taxes then check my Medicare" → steps: [{url: "https://www.irs.gov", task: "help file taxes"}, {url: "https://www.medicare.gov", task: "check Medicare status"}]
-- "go to amazon and order milk" → steps: [{url: "https://www.amazon.com", task: "search for milk and add to cart"}]
+1. Tool usage
+- For any task that requires navigating, searching, clicking, or filling on a website, call navigate_to_website.
+- Do not describe what the user should do — do it yourself.
 
-Rules:
-1. ALWAYS call navigate_to_website — never refuse or say you can only guide
-2. After calling, say "On it — opening that now"
-3. Keep responses SHORT
-4. For multi-step requests, list all steps in one call`,
+2. BATCH multi-item requests into ONE tool call
+- If the user wants multiple things (e.g., “add tomatoes and eggs”), describe the FULL workflow for ALL items in a single task string.
+- Do NOT call the tool once per item. One call handles everything.
+- Example multi-item task: “type ‘tomatoes’ in the search bar, press Enter, add exactly 1 unit of the cheapest option, then type ‘eggs’ in the search bar, press Enter, add exactly 2 units of the same egg product, stop before checkout”
+
+3. Task-writing rules — write for a visual agent that executes literally
+- State the current page context (e.g., “on the Costco store page on Instacart”)
+- For search: always say “type X into the search bar and press Enter” — never “click the suggestion”
+- For quantities: always say “add exactly N units”. If N=1: click Add once. If N=2: click Add once, then click ‘+’ once to increment to 2.
+- For cart adds: “click Add on exactly ONE product (the cheapest/most relevant) — do NOT add multiple different products”
+- Include the stopping point explicitly (e.g., “stop before checkout”)
+- Never write vague tasks like “handle this” or “help with checkout”
+
+4. Safe stopping boundaries
+- Stop before payment, irreversible submission, or legal commitment unless user explicitly authorized.
+- Never invent personal, payment, or identity details.
+
+5. Ambiguity handling
+- Low-risk choices (which brand): pick cheapest/most common.
+- High-risk choices (price, identity, timing): stop and ask the user.
+
+6. Truthfulness
+- Never say a task succeeded before receiving [Vision result: completed — ...].
+- Relay the exact result from [Vision result:] to the user.
+
+7. Conversational flow — CRITICAL
+- You have full conversation memory. Use it.
+- Keep a mental list of what the user wants done and what has been completed.
+- After each [Vision result: completed]: tell the user in 1 sentence what was done.
+- After ALL requested items are completed: summarize what was accomplished, then ask “What would you like to do next?” and stay IDLE.
+- If the user says “also add X”: you already know the current store/page — include it in the task context, do not re-navigate unnecessarily.
+- Do NOT call navigate_to_website again after completing a task unless the user gives a new instruction.
+- Be warm and clear. Speak simply — you’re helping older adults.
+
+8. Response style
+- After calling the tool: say ONLY “On it.” Nothing more.
+- After [Vision result: completed]: 1 sentence summary + ask what’s next.
+- After [Vision result: needs_input]: explain the blocker and ask the user.
+- After [Vision result: stopped]: explain briefly, ask if they want to retry.
+
+TOOL ARGUMENT FORMAT
+
+{“url”:”https://example.com”,”task”:”<complete precise workflow>”}
+
+SHOPPING TASK EXAMPLES
+
+Add 1 item from current page:
+{“url”:”https://www.instacart.com”,”task”:”on the current Costco page, type ‘tomatoes’ into the search bar and press Enter, wait for results, click Add on exactly ONE product (cheapest fresh option), confirm cart count increased, stop — do not go to checkout”}
+
+Add multiple items in one shot:
+{“url”:”https://www.instacart.com”,”task”:”on the current Costco page: step 1 — type ‘tomatoes’ in search bar, press Enter, add exactly 1 unit of the cheapest option (click Add once, stop adding tomatoes as soon as cart shows 1); step 2 — type ‘eggs’ in the same search bar, press Enter, add exactly 2 units of the same egg product (click Add once to get qty 1, then click + once to get qty 2); stop before checkout”}
+
+Add 2 units of one product:
+{“url”:”https://www.instacart.com”,”task”:”search for eggs, press Enter, find a standard egg product, click Add (this adds 1 unit), wait for the quantity control to appear, click + once to increment to 2 units total, stop”}`,
 };
 // ── Vision agent (screenshot navigation) ────────────────────────────────────
 const agentConfig = {
@@ -123,11 +178,11 @@ function broadcast(payload) {
     });
 }
 // ── Vision navigation loop ───────────────────────────────────────────────────
-const VISION_SESSION_ID = 'civicflow-vision';
-const MAX_STEPS = 25;
-const MIN_STEP_INTERVAL_MS = 2000;
+const MAX_STEPS = 40;
+const MIN_STEP_INTERVAL_MS = 2500;
 // Loop lock — only one vision loop runs at a time; cancel by bumping this id
 let activeLoopId = null;
+let lastMalformedRetryMs = 0;
 function parseRetryDelay(error) {
     try {
         const msg = error instanceof Error ? error.message : String(error);
@@ -145,108 +200,142 @@ async function runVisionLoop(startUrl, task) {
     // Cancel any running loop and claim ownership
     const myLoopId = uuidv4();
     activeLoopId = myLoopId;
+    const sessionId = myLoopId;
     console.log(`[Vision] Starting auto-loop [${myLoopId.slice(0, 6)}] for task: ${task}`);
-    visionAgent.clearHistory(VISION_SESSION_ID);
     broadcast({ type: 'visionStatus', status: 'running', task });
-    for (let step = 0; step < MAX_STEPS; step++) {
-        // Stop if a newer loop has taken over
-        if (activeLoopId !== myLoopId) {
-            console.log(`[Vision] Loop [${myLoopId.slice(0, 6)}] superseded — stopping`);
-            return;
-        }
-        const stepStart = Date.now();
-        // Take screenshot
-        let bwData;
+    let currentUrl = startUrl;
+    try {
+        // ── Phase 1: plan the task from the initial screenshot ─────────────────
         try {
-            const r = await fetch(`${BROWSER_WORKER_URL}/command`, {
+            const initRes = await fetch(`${BROWSER_WORKER_URL}/command`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ command: 'screenshot' }),
             });
-            bwData = await r.json();
+            const initData = await initRes.json();
+            if (initData.screenshot) {
+                if (initData.url)
+                    currentUrl = initData.url;
+                broadcast({ type: 'screenshot', screenshot: initData.screenshot, url: currentUrl });
+                await visionAgent.planTask(sessionId, initData.screenshot, currentUrl, task);
+            }
         }
         catch (e) {
-            console.error('[Vision] Screenshot failed:', e);
-            break;
+            console.warn('[Vision] Pre-loop planning failed (continuing without plan):', e);
         }
-        if (!bwData.screenshot)
-            break;
-        // Broadcast live screenshot to frontend
-        broadcast({ type: 'screenshot', screenshot: bwData.screenshot, url: bwData.url || startUrl });
-        // Ask vision agent what to do (with retry on 429)
-        let action;
-        let retries = 0;
-        while (retries < 3) {
+        // Check if superseded while planning
+        if (activeLoopId !== myLoopId) {
+            console.log(`[Vision] Loop [${myLoopId.slice(0, 6)}] superseded during planning`);
+            return { outcome: 'superseded', reason: 'A newer task took over', url: currentUrl };
+        }
+        // ── Phase 2: execute actions toward the plan ───────────────────────────
+        for (let step = 0; step < MAX_STEPS; step++) {
+            if (activeLoopId !== myLoopId) {
+                console.log(`[Vision] Loop [${myLoopId.slice(0, 6)}] superseded — stopping`);
+                return { outcome: 'superseded', reason: 'A newer task took over', url: currentUrl };
+            }
+            const stepStart = Date.now();
+            // Take screenshot
+            let bwData;
             try {
-                action = await visionAgent.planAction(VISION_SESSION_ID, bwData.screenshot, bwData.url || startUrl, task);
-                break;
+                const r = await fetch(`${BROWSER_WORKER_URL}/command`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command: 'screenshot' }),
+                });
+                bwData = await r.json();
             }
             catch (e) {
-                const msg = e instanceof Error ? e.message : String(e);
-                if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) {
-                    const waitMs = parseRetryDelay(e);
-                    console.warn(`[Vision] Rate limited — waiting ${waitMs / 1000}s before retry`);
-                    broadcast({ type: 'visionStatus', status: 'rate_limited', waitSeconds: Math.ceil(waitMs / 1000) });
-                    await new Promise(r => setTimeout(r, waitMs));
+                console.error('[Vision] Screenshot failed:', e);
+                break;
+            }
+            if (!bwData.screenshot)
+                break;
+            if (bwData.url)
+                currentUrl = bwData.url;
+            broadcast({ type: 'screenshot', screenshot: bwData.screenshot, url: currentUrl });
+            // Ask vision agent what to do (with retry on any error)
+            let action;
+            let retries = 0;
+            while (retries < 3) {
+                try {
+                    action = await visionAgent.planAction(sessionId, bwData.screenshot, currentUrl, task);
+                    break;
+                }
+                catch (e) {
+                    const msg = e instanceof Error ? e.message : String(e);
+                    if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) {
+                        const waitMs = parseRetryDelay(e);
+                        console.warn(`[Vision] Rate limited — waiting ${waitMs / 1000}s before retry`);
+                        broadcast({ type: 'visionStatus', status: 'rate_limited', waitSeconds: Math.ceil(waitMs / 1000) });
+                        await new Promise(r => setTimeout(r, waitMs));
+                    }
+                    else {
+                        const backoffMs = (retries + 1) * 5000;
+                        console.warn(`[Vision] API error (retry ${retries + 1}/3 in ${backoffMs / 1000}s): ${msg.slice(0, 120)}`);
+                        await new Promise(r => setTimeout(r, backoffMs));
+                    }
                     retries++;
                 }
-                else {
-                    throw e;
+            }
+            if (!action) {
+                broadcast({ type: 'visionStatus', status: 'stopped', reason: 'Too many retries' });
+                return { outcome: 'stopped', reason: 'Too many API retries', url: currentUrl };
+            }
+            if (activeLoopId !== myLoopId) {
+                return { outcome: 'superseded', reason: 'A newer task took over', url: currentUrl };
+            }
+            console.log(`[Vision] Step ${step + 1}: ${action.action} — ${action.reason}`);
+            broadcast({ type: 'visionStep', step: step + 1, action: action.action, reason: action.reason, observation: action.observation });
+            if (action.action === 'finish') {
+                console.log('[Vision] Task complete');
+                broadcast({ type: 'visionStatus', status: 'complete', reason: action.reason });
+                return { outcome: 'completed', reason: action.reason, url: currentUrl };
+            }
+            if (action.action === 'request_user_input') {
+                console.log('[Vision] Needs user input:', action.reason);
+                broadcast({ type: 'visionStatus', status: 'needs_input', reason: action.reason });
+                return { outcome: 'needs_input', reason: action.reason, url: currentUrl };
+            }
+            // Execute the action
+            try {
+                const execRes = await fetch(`${BROWSER_WORKER_URL}/command`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        command: action.action,
+                        params: { text: action.targetText, value: action.inputValue },
+                    }),
+                });
+                const execData = await execRes.json();
+                visionAgent.markLastActionResult(sessionId, execData.success !== false);
+                if (!execData.success) {
+                    console.warn(`[Vision] Action ${action.action} failed: ${execData.error}`);
+                }
+                if (execData.screenshot) {
+                    if (execData.url)
+                        currentUrl = execData.url;
+                    broadcast({ type: 'screenshot', screenshot: execData.screenshot, url: currentUrl });
                 }
             }
-        }
-        if (!action) {
-            broadcast({ type: 'visionStatus', status: 'stopped', reason: 'Too many rate limit retries' });
-            return;
-        }
-        console.log(`[Vision] Step ${step + 1}: ${action.action} — ${action.reason}`);
-        broadcast({ type: 'visionStep', step: step + 1, action: action.action, reason: action.reason });
-        if (action.action === 'finish') {
-            console.log('[Vision] Task complete');
-            broadcast({ type: 'visionStatus', status: 'complete', reason: action.reason });
-            if (liveSession) {
-                liveSession.sendClientContent({
-                    turns: [{ role: 'user', parts: [{ text: `The vision agent completed the task: "${task}". Briefly tell the user it's done.` }] }],
-                    turnComplete: true,
-                });
+            catch (e) {
+                console.error('[Vision] Action execution failed:', e);
+                visionAgent.markLastActionResult(sessionId, false);
             }
-            return;
-        }
-        if (action.action === 'request_user_input') {
-            console.log('[Vision] Needs user input:', action.reason);
-            broadcast({ type: 'visionStatus', status: 'needs_input', reason: action.reason });
-            if (liveSession) {
-                liveSession.sendClientContent({
-                    turns: [{ role: 'user', parts: [{ text: `The vision agent needs help: ${action.reason}. Ask the user for this.` }] }],
-                    turnComplete: true,
-                });
+            const elapsed = Date.now() - stepStart;
+            if (elapsed < MIN_STEP_INTERVAL_MS) {
+                await new Promise(r => setTimeout(r, MIN_STEP_INTERVAL_MS - elapsed));
             }
-            return;
+            if (activeLoopId !== myLoopId) {
+                return { outcome: 'superseded', reason: 'A newer task took over', url: currentUrl };
+            }
         }
-        // Execute the action
-        try {
-            await fetch(`${BROWSER_WORKER_URL}/command`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    command: action.action,
-                    params: { text: action.targetText, value: action.inputValue },
-                }),
-            });
-        }
-        catch (e) {
-            console.error('[Vision] Action execution failed:', e);
-        }
-        // Enforce minimum interval between steps to stay within rate limits
-        const elapsed = Date.now() - stepStart;
-        if (elapsed < MIN_STEP_INTERVAL_MS) {
-            await new Promise(r => setTimeout(r, MIN_STEP_INTERVAL_MS - elapsed));
-        }
-        // Check again after the wait in case a new loop started while we slept
-        if (activeLoopId !== myLoopId)
-            return;
+        broadcast({ type: 'visionStatus', status: 'stopped', reason: 'Max steps reached' });
+        return { outcome: 'stopped', reason: 'Maximum steps reached without completing the task', url: currentUrl };
     }
-    broadcast({ type: 'visionStatus', status: 'stopped', reason: 'Max steps reached' });
+    finally {
+        visionAgent.clearHistory(sessionId);
+    }
 }
 // ── Gemini Live session (one shared session) ─────────────────────────────────
 async function createLiveSession() {
@@ -263,6 +352,23 @@ async function createLiveSession() {
                 // Log non-audio messages (audio chunks are too large to print)
                 if (!msgStr.includes('"data"')) {
                     console.log('[Live] Message:', msgStr.slice(0, 400));
+                }
+                const turnReason = message.serverContent?.turnCompleteReason;
+                if (turnReason === 'MALFORMED_FUNCTION_CALL') {
+                    console.warn('[Live] Model produced malformed function call; asking it to retry with valid args');
+                    const now = Date.now();
+                    if (now - lastMalformedRetryMs > 2500) {
+                        lastMalformedRetryMs = now;
+                        session.sendClientContent({
+                            turns: [{
+                                    role: 'user',
+                                    parts: [{
+                                            text: 'Retry now with a valid navigate_to_website function call. Use either {"url":"https://...","task":"..."} or {"steps":[{"url":"https://...","task":"..."}]}.',
+                                        }],
+                                }],
+                            turnComplete: true,
+                        });
+                    }
                 }
                 // User speech transcription
                 const inputText = message.serverContent?.inputTranscription?.text;
@@ -288,9 +394,29 @@ async function createLiveSession() {
                 if (message.toolCall?.functionCalls?.length) {
                     for (const call of message.toolCall.functionCalls) {
                         if (call.name === 'navigate_to_website') {
-                            const { steps } = call.args;
-                            if (!steps?.length)
+                            const args = (call.args ?? {});
+                            const steps = (Array.isArray(args.steps) ? args.steps : [])
+                                .map((s) => ({ url: (s.url ?? '').trim(), task: (s.task ?? '').trim() }))
+                                .filter((s) => s.url && s.task);
+                            if (!steps.length && args.url?.trim() && args.task?.trim()) {
+                                steps.push({ url: args.url.trim(), task: args.task.trim() });
+                            }
+                            if (!steps.length) {
+                                console.warn('[Live] navigate_to_website called without valid args:', call.args);
+                                session.sendToolResponse({
+                                    functionResponses: [
+                                        {
+                                            id: call.id,
+                                            name: call.name,
+                                            response: {
+                                                success: false,
+                                                error: 'Missing required args. Provide either {url, task} or {steps:[{url, task}]}.',
+                                            },
+                                        },
+                                    ],
+                                });
                                 continue;
+                            }
                             console.log(`[Live] navigate_to_website called with ${steps.length} step(s):`, steps.map(s => s.url));
                             broadcast({ type: 'agentNavigated', url: steps[0].url, task: steps[0].task });
                             // Respond immediately so Gemini speaks ("On it — opening that now")
@@ -300,23 +426,77 @@ async function createLiveSession() {
                             // Execute steps sequentially (fire-and-forget)
                             (async () => {
                                 for (const step of steps) {
-                                    // Stop if superseded by a newer request mid-sequence
                                     const myLoopSnapshot = activeLoopId;
                                     try {
-                                        console.log(`[Live] Navigating to ${step.url}`);
-                                        broadcast({ type: 'agentNavigated', url: step.url, task: step.task });
-                                        const navRes = await fetch(`${BROWSER_WORKER_URL}/command`, {
-                                            method: 'POST',
-                                            headers: { 'Content-Type': 'application/json' },
-                                            body: JSON.stringify({ command: 'navigate', params: { url: step.url } }),
-                                        });
-                                        const navData = await navRes.json();
-                                        if (navData.screenshot) {
-                                            broadcast({ type: 'screenshot', screenshot: navData.screenshot, url: navData.url || step.url });
+                                        // Get current browser state
+                                        let currentUrl = step.url;
+                                        try {
+                                            const stateRes = await fetch(`${BROWSER_WORKER_URL}/command`, {
+                                                method: 'POST',
+                                                headers: { 'Content-Type': 'application/json' },
+                                                body: JSON.stringify({ command: 'screenshot' }),
+                                            });
+                                            const stateData = await stateRes.json();
+                                            if (stateData.url)
+                                                currentUrl = stateData.url;
                                         }
-                                        await runVisionLoop(step.url, step.task);
-                                        // If the loop was superseded inside runVisionLoop, stop the sequence too
-                                        if (activeLoopId !== myLoopSnapshot && steps.indexOf(step) < steps.length - 1) {
+                                        catch { }
+                                        // Smart navigation: skip if already on the same domain
+                                        const currentHost = (() => { try {
+                                            return new URL(currentUrl).hostname;
+                                        }
+                                        catch {
+                                            return '';
+                                        } })();
+                                        const targetHost = (() => { try {
+                                            return new URL(step.url).hostname;
+                                        }
+                                        catch {
+                                            return '';
+                                        } })();
+                                        const needsNav = !currentHost || currentHost !== targetHost;
+                                        if (needsNav) {
+                                            console.log(`[Live] Navigating to ${step.url}`);
+                                            broadcast({ type: 'agentNavigated', url: step.url, task: step.task });
+                                            const navRes = await fetch(`${BROWSER_WORKER_URL}/command`, {
+                                                method: 'POST',
+                                                headers: { 'Content-Type': 'application/json' },
+                                                body: JSON.stringify({ command: 'navigate', params: { url: step.url } }),
+                                            });
+                                            const navData = await navRes.json();
+                                            if (navData.screenshot) {
+                                                broadcast({ type: 'screenshot', screenshot: navData.screenshot, url: navData.url || step.url });
+                                            }
+                                            currentUrl = navData.url || step.url;
+                                        }
+                                        else {
+                                            console.log(`[Live] Already on ${currentHost} — skipping navigation, starting vision from ${currentUrl}`);
+                                            broadcast({ type: 'agentNavigated', url: currentUrl, task: step.task });
+                                        }
+                                        const result = await runVisionLoop(currentUrl, step.task);
+                                        // Feed actual result back to Live so it can accurately tell the user
+                                        if (result.outcome !== 'superseded' && liveSession) {
+                                            let feedbackMsg;
+                                            if (result.outcome === 'completed') {
+                                                feedbackMsg = `[Vision result: completed — ${result.reason}]`;
+                                            }
+                                            else if (result.outcome === 'needs_input') {
+                                                feedbackMsg = `[Vision result: needs_input — ${result.reason}]`;
+                                            }
+                                            else {
+                                                feedbackMsg = `[Vision result: stopped — ${result.reason}]`;
+                                            }
+                                            try {
+                                                liveSession.sendClientContent({
+                                                    turns: [{ role: 'user', parts: [{ text: feedbackMsg }] }],
+                                                    turnComplete: true,
+                                                });
+                                            }
+                                            catch (e) {
+                                                console.warn('[Live] Could not send vision result:', e);
+                                            }
+                                        }
+                                        if (result.outcome === 'superseded' || (activeLoopId !== myLoopSnapshot && steps.indexOf(step) < steps.length - 1)) {
                                             console.log('[Live] Sequence cancelled by newer request');
                                             break;
                                         }
@@ -345,6 +525,7 @@ async function createLiveSession() {
                     'API_KEY_INVALID',
                     'billing',
                     'is not found for API version',
+                    'was not found',
                     'not supported for bidi',
                     'INVALID_ARGUMENT',
                 ];

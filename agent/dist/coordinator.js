@@ -34,22 +34,6 @@ export class AgentCoordinator extends EventEmitter {
         this.voiceAgent.on('status', (data) => {
             this.broadcastStatus(data.sessionId);
         });
-        // Connect vision agent events
-        this.visionAgent.on('stuck', async (data) => {
-            console.log(`[Coordinator] Vision agent stuck: ${data.reason}`);
-            await this.voiceAgent.announce(data.sessionId, `I'm having trouble. ${data.reason}. Would you like to take control?`);
-            this.updateSessionStatus(data.sessionId, 'stuck');
-        });
-        this.visionAgent.on('completed', async (data) => {
-            console.log(`[Coordinator] Vision agent completed task`);
-            await this.voiceAgent.announce(data.sessionId, 'Task completed successfully!');
-            this.updateSessionStatus(data.sessionId, 'completed');
-        });
-        this.visionAgent.on('error', async (data) => {
-            console.log(`[Coordinator] Vision agent error: ${data.error}`);
-            await this.voiceAgent.announce(data.sessionId, `I encountered an error: ${data.error}. Please try again.`);
-            this.updateSessionStatus(data.sessionId, 'error');
-        });
         console.log('[Coordinator] Initialized with voice and vision agents');
     }
     /**
